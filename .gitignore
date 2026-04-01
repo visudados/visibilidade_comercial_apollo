@@ -1,0 +1,30 @@
+# Perfis de navegador (dados locais da VISU)
+profile_visu/
+
+# Configurações do Visual Studio Code
+.vscode/
+
+# Logs
+*.log
+
+#Ambientes Virtuais
+.venv/
+venv/
+
+# Arquivos Python gerados automaticamente
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Arquivos temporários
+*.swp
+*.bak
+*.tmp
+*.~ 
+
+# Distribuição
+build/
+dist/
+*.egg-info/
+.eggs/
