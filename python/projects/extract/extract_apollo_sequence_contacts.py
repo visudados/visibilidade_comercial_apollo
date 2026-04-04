@@ -199,9 +199,6 @@ def clicar_elemento(
             f"     Tipo: {tipo.upper()} | Seletor: {seletor}\n"
             f"     Verifique se a página carregou e se o seletor ainda é válido."
         )
-        driver.save_screenshot(
-            f"erro_{nome.replace(' ', '_').replace('/', '_').lower()}.png"
-        )
         return False
 
     try:
