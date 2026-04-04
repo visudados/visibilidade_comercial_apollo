@@ -49,7 +49,7 @@ git clone [https://github.com/visudados/visibilidade_comercial_apollo.git](https
 cd visibilidade_comercial_apollo
 
 # Crie e ative o ambiente virtual (venv)
-python -m venv venv
+python -m venv .venv
 venv\Scripts\activate
 
 # Instale as dependências
