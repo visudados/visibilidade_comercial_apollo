@@ -1,133 +1,44 @@
-# -------------------------------------------------------------------------
-# common_setup.py - VISU Dados
-# -------------------------------------------------------------------------
-# Módulo de verificação e configuração inicial do ambiente de automação.
-#
-# Responsabilidades:
-#   1. Verificar se o perfil Chrome da VISU existe e tem sessão ativa
-#   2. Se não houver perfil ou sessão, abrir o Chrome e aguardar o login
-#      manual do usuário no Apollo.io via Google — SEM input() bloqueante
-#   3. Confirmar que a sessão foi estabelecida antes de prosseguir
-#
-# CORREÇÕES aplicadas nesta versão:
-#   - Removido input() bloqueante: o script agora detecta o login
-#     automaticamente via polling da URL, sem intervenção manual.
-#   - Removida abertura dupla do Chrome: verificar_e_configurar() agora
-#     recebe o driver já iniciado (passado pelo script de extração), evitando
-#     o problema de perfil travado entre duas instâncias do Chrome.
-#   - A navegação para a URL de destino após login confirmado é feita
-#     diretamente nesta função, dentro do mesmo driver.
-# -------------------------------------------------------------------------
+"""
+common_setup.py - VISU Dados
+=============================
 
-import os
+Módulo responsável por gerenciar a navegação inicial e a validação de sessão
+do Apollo.io utilizando o padrão de "Navegação Direta" (KISS).
+"""
+
 import time
 import logging
 from pathlib import Path
-import sys
-sys.path.append(str(Path(__file__).resolve().parents[1]))
-from common.common_browser import CAMINHO_PERFIL_VISU
 
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
-
-# -------------------------------------------------------------------------
-# Configuração de logging
-# -------------------------------------------------------------------------
 log = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------
 # Constantes
 # -------------------------------------------------------------------------
-URL_APOLLO_LOGIN    = "https://app.apollo.io/#/login"
-URL_APOLLO_HOME     = "https://app.apollo.io"
-
 # Tempo máximo aguardando o usuário concluir o login manualmente (segundos).
-# 3 minutos é suficiente para qualquer fluxo OAuth do Google.
+# 180s (3 minutos) é ideal para digitação de credenciais e MFA/2FA do Google.
 TIMEOUT_LOGIN_MANUAL = 180
 
-# Arquivo de cookie que o Google OAuth salva após login bem-sucedido.
-COOKIE_FILE_RELATIVO = Path("Default") / "Cookies"
-
 
 # -------------------------------------------------------------------------
-# Verificação do perfil (sem abrir Chrome)
+# Funções de Setup e Autenticação
 # -------------------------------------------------------------------------
-def perfil_existe(caminho_perfil: Path) -> bool:
-    """
-    Retorna True se a pasta do perfil existe e contém o arquivo de cookies.
-    Verificação puramente de sistema de arquivos — não abre o Chrome.
-    """
-    cookies_path = caminho_perfil / COOKIE_FILE_RELATIVO
-    existe = caminho_perfil.exists() and cookies_path.exists()
-    if existe:
-        log.info(f"[SETUP] Perfil Chrome encontrado em: {caminho_perfil}")
-    else:
-        log.warning(f"[SETUP] Perfil Chrome NÃO encontrado em: {caminho_perfil}")
-    return existe
 
-
-# -------------------------------------------------------------------------
-# Verificação de sessão (usando o driver já aberto)
-# -------------------------------------------------------------------------
-def sessao_ativa(driver) -> bool:
-    """
-    Navega até a home do Apollo e verifica se a sessão está ativa.
-    Usa o driver já iniciado — não abre um Chrome separado.
-
-    Retorna True se a sessão está ativa, False se expirou ou não existe.
-    """
-    log.info("[SETUP] Verificando se a sessão do Apollo está ativa...")
-    try:
-        driver.get(URL_APOLLO_HOME)
-        # Aguarda o SPA redirecionar: sessão ativa vai para /home ou similar;
-        # sessão expirada vai para /#/login
-        time.sleep(3)
-        url_atual = driver.current_url
-        ativa = "login" not in url_atual and "apollo.io" in url_atual
-        if ativa:
-            log.info(f"[SETUP] ✅ Sessão ativa. URL: {url_atual}")
-        else:
-            log.warning(f"[SETUP] ⚠️  Sessão expirada ou inválida. URL: {url_atual}")
-        return ativa
-    except Exception as e:
-        log.error(f"[SETUP] Erro ao verificar sessão: {e}")
-        return False
-
-
-# -------------------------------------------------------------------------
-# Login manual assistido — sem input() bloqueante
-# -------------------------------------------------------------------------
 def aguardar_login_manual(driver, timeout: int = TIMEOUT_LOGIN_MANUAL) -> bool:
     """
-    Navega para a tela de login do Apollo e aguarda automaticamente
-    até detectar que o usuário concluiu o login (polling de URL).
-
-    Substitui o input() bloqueante anterior: em vez de parar e esperar
-    que o usuário tecle ENTER, o script verifica a URL a cada 2 segundos.
-    Quando a URL deixa de conter 'login', o login foi concluído.
-
-    Exibe instruções no terminal para guiar o usuário, mas não trava
-    o processo esperando entrada de teclado.
-
-    Retorna True se o login foi detectado dentro do timeout, False caso contrário.
+    Monitora a URL atual até que o usuário conclua o login.
+    Não força navegação, apenas observa a mudança de estado da página.
     """
-    driver.get(URL_APOLLO_LOGIN)
-
     print()
     print("=" * 60)
     print("  LOGIN NECESSÁRIO — VISU Dados / Apollo.io")
     print("=" * 60)
-    print()
-    print("  O Chrome está aberto na página de login do Apollo.io.")
-    print()
+    print("  O Apollo redirecionou para a página de login.")
     print("  Por favor:")
-    print("    1. Clique em 'Log in with Google'")
-    print("    2. Selecione a conta @visudados.com.br")
-    print("    3. Aguarde ser redirecionado para o Apollo")
-    print()
-    print(f"  O script continuará automaticamente após detectar o login.")
+    print("    1. Vá para a janela do Chrome que acabou de abrir.")
+    print("    2. Clique em 'Log in with Google'.")
+    print("    3. Selecione a conta @visudados.com.br e confirme no celular se necessário.")
+    print("    4. Aguarde o redirecionamento automático da página.")
     print(f"  Tempo limite: {timeout // 60} minutos.")
     print("=" * 60)
     print()
@@ -135,71 +46,60 @@ def aguardar_login_manual(driver, timeout: int = TIMEOUT_LOGIN_MANUAL) -> bool:
     inicio = time.time()
     while time.time() - inicio < timeout:
         url_atual = driver.current_url
+        
+        # Se a palavra 'login' sumir da URL e continuarmos no Apollo, o login foi feito.
         if "login" not in url_atual and "apollo.io" in url_atual:
-            log.info(f"[SETUP] ✅ Login detectado automaticamente. URL: {url_atual}")
-            print("  ✅ Login detectado! Continuando automação...")
+            log.info(f"[SETUP] ✅ Login detectado automaticamente. URL atual: {url_atual}")
+            print("  ✅ Login detectado com sucesso! Retomando automação...")
             print()
             return True
-        time.sleep(2)
+        
+        time.sleep(2) # Aguarda 2 segundos antes de checar a URL novamente para não sobrecarregar
 
-    log.error(
-        f"[SETUP] ❌ Timeout: login não detectado em {timeout}s.\n"
-        "         Certifique-se de completar o login dentro do tempo limite."
-    )
-    print(f"  ❌ Tempo limite atingido. Execute o script novamente.")
-    print()
+    log.error("[SETUP] ❌ Timeout: login não detectado no tempo limite.")
+    print("  ❌ Tempo limite atingido. Feche a janela e execute o script novamente.\n")
     return False
 
 
-# -------------------------------------------------------------------------
-# Função principal — recebe o driver já iniciado pelo script de extração
-# -------------------------------------------------------------------------
 def verificar_e_configurar(driver, caminho_perfil: Path, url_destino: str) -> bool:
     """
-    Verifica se o ambiente está pronto e navega para url_destino.
-
-    MUDANÇA DE ASSINATURA: agora recebe o `driver` já iniciado pelo script
-    de extração. Isso elimina a abertura dupla do Chrome que causava o
-    travamento do perfil entre duas instâncias.
-
-    Fluxo de decisão:
-      1. Perfil sem cookies (primeiro uso) → abre tela de login, aguarda
-         login automático, navega para url_destino
-      2. Perfil com cookies + sessão ativa → navega direto para url_destino
-      3. Perfil com cookies + sessão expirada → abre tela de login, aguarda
-         login automático, navega para url_destino
-
-    Parâmetros
-    ----------
-    driver        : WebDriver já iniciado por iniciar_chrome_driver()
-    caminho_perfil: Path do perfil VISU (para checar existência de cookies)
-    url_destino   : URL para onde navegar após confirmar sessão ativa
-
-    Retorna True se pronto para extração, False em caso de falha.
+    Aplica o padrão de 'Navegação Direta'.
+    Vai direto para a página alvo e reage dinamicamente ao roteamento do SPA do Apollo.
     """
-    log.info("[SETUP] ── Verificação de ambiente ──────────────────────────")
+    log.info("[SETUP] ── Iniciando Navegação ──────────────────────────")
+    log.info(f"[SETUP] Acessando destino inicial: {url_destino}")
+    
+    # 1. Navega direto para a página que a automação precisa
+    driver.get(url_destino)
 
-    # ── Caso 1: perfil sem cookies — primeiro uso ──────────────────────────
-    if not perfil_existe(caminho_perfil):
-        log.info("[SETUP] Perfil não configurado. Iniciando login inicial...")
+    # 2. Mini-polling de 10 segundos
+    # Dá tempo para o Single Page Application (SPA) decidir o roteamento (loading spinner).
+    log.info("[SETUP] Verificando estado da sessão...")
+    precisa_logar = False
+    
+    for _ in range(10):
+        time.sleep(1)
+        if "login" in driver.current_url:
+            precisa_logar = True
+            break
+
+    # 3. Avalia a reação do site
+    if precisa_logar:
+        # O Apollo nos barrou e mandou pro login
+        log.warning("[SETUP] Acesso negado. A sessão expirou ou não existe.")
+        
         if not aguardar_login_manual(driver):
             return False
-        # Após login, navega para a URL de destino da extração
-        log.info(f"[SETUP] Navegando para destino: {url_destino}")
+            
+        # Após logar, o Apollo geralmente joga para a Home. 
+        # Precisamos forçar a ida para a URL alvo novamente de forma limpa.
+        log.info(f"[SETUP] Redirecionando de volta ao destino final: {url_destino}")
         driver.get(url_destino)
+        
+        # Dá um fôlego maior (5s) para o Apollo carregar a página pesada após um login recente
+        time.sleep(5) 
         return True
 
-    # ── Caso 2/3: perfil existe — verifica sessão no driver atual ─────────
-    if sessao_ativa(driver):
-        # Sessão OK — navega direto para o destino
-        log.info(f"[SETUP] ✅ Sessão ativa. Navegando para: {url_destino}")
-        driver.get(url_destino)
-        return True
-    else:
-        # Sessão expirada — guia renovação e navega após login
-        log.warning("[SETUP] Sessão expirada. Abrindo tela de login para renovação...")
-        if not aguardar_login_manual(driver):
-            return False
-        log.info(f"[SETUP] Navegando para destino após renovação: {url_destino}")
-        driver.get(url_destino)
-        return True
+    # Se passamos os 10 segundos e não caímos no login, assumimos que estamos logados e na página correta!
+    log.info("[SETUP] ✅ Sessão validada sem intervenção. Destino alcançado diretamente.")
+    return True

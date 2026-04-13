@@ -2,38 +2,8 @@
 extract_apollo_sequence_contacts.py - VISU Dados
 =================================================
 
-Módulo de extração de contatos filtrados por Step de uma Sequence
-específica do Apollo.io.
-
-Representa a fase de **extração (Extract)** do pipeline ETL da VISU para
-dados de contatos do Apollo por etapa de Sequence. Utiliza o perfil Chrome
-logado da VISU, eliminando a necessidade de armazenar credenciais.
-
-Fluxo de execução (12 etapas):
--------------------------------
-1.  Navega para a lista de Sequences e clica na Sequence alvo
-2.  Clica na aba "Contacts" da Sequence
-3.  Confirma o modal "Are you sure?" clicando em "Confirm"
-4.  Clica em "Show Filters" para abrir o painel de filtros
-5.  Clica no accordion "Sequence Step" para expandir os filtros de etapa
-6.  Marca o checkbox "Step: 1" (ou o step configurado)
-7.  Clica no botão de seleção múltipla (bulk select checkbox)
-8.  Clica em "Select all people (N)" para selecionar todos os contatos
-9.  Clica no botão "More actions" (⋯) da toolbar
-10. Clica em "Export" no menu de ações
-11. Clica em "Export records" no modal de exportação
-12. Clica em "Download" no modal de confirmação e aguarda o arquivo
-
-Autenticação:
--------------
-Nenhuma credencial é armazenada neste módulo. O login é mantido
-pelo perfil Chrome em /projects/chrome_profiles/profile_visu.
-
-Dependências:
--------------
-- selenium (Selenium Manager cuida do chromedriver automaticamente)
-- common_browser (módulo interno VISU)
-- common_setup  (módulo interno VISU)
+Módulo orquestrador de extração de contatos filtrados por Step de Múltiplas Sequences
+do Apollo.io.
 """
 
 # -------------------------------------------------------------------------
@@ -44,15 +14,17 @@ import os
 import time
 import glob
 import logging
+import shutil
 from pathlib import Path
 from typing import Optional
 
 sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 from common.common_browser import iniciar_chrome_driver, CAMINHO_PERFIL_VISU
 from common.common_setup import verificar_e_configurar
@@ -71,122 +43,41 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------
-# Constantes — URLs
+# Constantes — URLs e Tempos
 # -------------------------------------------------------------------------
 URL_SEQUENCES_LIST = (
     "https://app.apollo.io/#/sequences"
     "?page=1&sortAscending=false&sortByField=lastUsedAt"
 )
 
-# Tempo máximo de espera por elementos (segundos)
 TIMEOUT_ELEMENTO = 30
-
-# Tempo máximo para o download completar (segundos)
 TIMEOUT_DOWNLOAD = 90
 
 # -------------------------------------------------------------------------
-# Seletores — centralizados para facilitar manutenção
+# Seletores (XPath / CSS)
 # -------------------------------------------------------------------------
-
-# Etapa 1 — Link da Sequence na tabela (texto parcial configurável)
-# XPath: <a> dentro de gridcell que contenha o nome da sequence
 def _xpath_sequence_link(nome_sequence: str) -> str:
     return f'//div[@role="gridcell"]//a[contains(., "{nome_sequence}")]'
 
-# Etapa 2 — Aba "Contacts"
-# <a id="Contacts" role="tab" ...>
 SELECTOR_TAB_CONTACTS = 'a#Contacts[role="tab"]'
-
-# Etapa 3 — Botão "Confirm" no modal "Are you sure?"
-# Aparece ao navegar para Contacts com alterações não salvas na Sequence.
-# <button data-cta-variant="destroy" ...><span>Confirm</span></button>
-# Usa data-cta-variant="destroy" + texto para não colidir com outros modais.
-XPATH_BTN_CONFIRM_MODAL = (
-    '//button[@data-cta-variant="destroy"]'
-    '[.//span[normalize-space(text())="Confirm"]]'
-)
-
-# Etapa 4 — Botão "Show Filters"
-# <button data-cy="finder-filter-button" ...>
+XPATH_BTN_CONFIRM_MODAL = '//button[@data-cta-variant="destroy"][.//span[normalize-space(text())="Confirm"]]'
 SELECTOR_BTN_SHOW_FILTERS = 'button[data-cy="finder-filter-button"]'
+XPATH_ACCORDION_SEQUENCE_STEP = '//div[contains(@class,"zp-accordion-header")][.//span[normalize-space(text())="Sequence Step"]]'
 
-# Etapa 5 — Header do accordion "Sequence Step"
-# <span>Sequence Step</span> dentro de um header clicável
-XPATH_ACCORDION_SEQUENCE_STEP = (
-    '//div[contains(@class,"zp-accordion-header")]'
-    '[.//span[normalize-space(text())="Sequence Step"]]'
-)
-
-# Etapa 5 — Checkbox/label do Step (texto configurável, ex: "Step: 1")
-# <label> que contém <span> com o texto do step
 def _xpath_step_label(step_label: str) -> str:
     return f'//label[.//span[normalize-space(text())="{step_label}"]]'
 
-# Etapa 6 — Botão de seleção múltipla (bulk select)
-# <button class="...finder-select-multiple-entities-button">
 SELECTOR_BTN_BULK_SELECT = 'button[class*="finder-select-multiple-entities-button"]'
-
-# Etapa 7 — Link "Select all people (N)"
-# <a data-cy="select-this-page" ...>
 SELECTOR_LINK_SELECT_ALL = 'a[data-cy="select-this-page"]'
-
-# Etapa 8 — Botão "More actions" (⋯) da toolbar de seleção
-# <button data-cy="more-button" ...>
 SELECTOR_BTN_MORE_ACTIONS = 'button[data-cy="more-button"]'
-
-# Etapa 9 — Link "Export" no menu dropdown
-# <a class="...zp-menu-item...">Export</a>  (sem data-cy preenchido)
-XPATH_LINK_EXPORT = (
-    '//a[contains(@class,"zp-menu-item")]'
-    '[normalize-space(.)="Export"]'
-)
-
-# Etapa 10 — Botão "Export records" no modal
-# <div data-elem="button-label">Export records</div> dentro de <button>
-XPATH_BTN_EXPORT_RECORDS = (
-    '//button[.//div[@data-elem="button-label" '
-    'and normalize-space(text())="Export records"]]'
-)
-
-# Etapa 12 — Botão "Download" no modal de confirmação
-# <div data-elem="button-label">Download</div> dentro de <button>
-XPATH_BTN_DOWNLOAD = (
-    '//button[.//div[@data-elem="button-label" '
-    'and normalize-space(text())="Download"]]'
-)
-
+XPATH_LINK_EXPORT = '//a[contains(@class,"zp-menu-item")][normalize-space(.)="Export"]'
+XPATH_BTN_EXPORT_RECORDS = '//button[.//div[@data-elem="button-label" and normalize-space(text())="Export records"]]'
+XPATH_BTN_DOWNLOAD = '//button[.//div[@data-elem="button-label" and normalize-space(text())="Download"]]'
 
 # -------------------------------------------------------------------------
-# Utilitário: clicar_elemento
+# Utilitários Originais (Browser)
 # -------------------------------------------------------------------------
-def clicar_elemento(
-    driver,
-    wait: WebDriverWait,
-    seletor: str,
-    tipo: str = "css",
-    descricao: str = "",
-    js_click: bool = False,
-) -> bool:
-    """Localiza um elemento na página e executa clique direto (.click()).
-
-    Usa `.click()` do Selenium em vez de focus()+ENTER, pois:
-    - Checkboxes e labels requerem clique real para alternar estado.
-    - Links <a> no Apollo respondem melhor a .click() do que a keypresses.
-    - Em caso de interceptação por outro elemento, `js_click=True` aciona
-      o clique via JavaScript, contornando overlays.
-
-    Args:
-        driver: Instância do WebDriver ativa.
-        wait: Instância de WebDriverWait configurada com o timeout desejado.
-        seletor: String do seletor CSS ou XPath.
-        tipo: "css" para CSS Selector, "xpath" para XPath. Default: "css".
-        descricao: Nome legível do elemento para logging. Default: seletor.
-        js_click: Se True, executa o clique via JavaScript (contorna overlays).
-            Default: False.
-
-    Returns:
-        True se o clique foi executado com sucesso, False em caso de erro.
-    """
+def clicar_elemento(driver, wait: WebDriverWait, seletor: str, tipo: str = "css", descricao: str = "", js_click: bool = False) -> bool:
     by = By.CSS_SELECTOR if tipo == "css" else By.XPATH
     nome = descricao or seletor
 
@@ -194,11 +85,7 @@ def clicar_elemento(
     try:
         elemento = wait.until(EC.element_to_be_clickable((by, seletor)))
     except TimeoutException:
-        log.error(
-            f"  ❌ Elemento não encontrado ou não clicável: {nome}\n"
-            f"     Tipo: {tipo.upper()} | Seletor: {seletor}\n"
-            f"     Verifique se a página carregou e se o seletor ainda é válido."
-        )
+        log.error(f"  ❌ Elemento não encontrado ou não clicável: {nome}")
         return False
 
     try:
@@ -209,307 +96,227 @@ def clicar_elemento(
             elemento.click()
             log.info(f"  ✅ Clique em: {nome}")
     except Exception as e:
-        # Fallback: tenta JS click se o clique direto falhar (ex: overlay)
         log.warning(f"  ⚠️  Clique direto falhou ({e}). Tentando JS click...")
         try:
             driver.execute_script("arguments[0].click();", elemento)
             log.info(f"  ✅ Clique JS (fallback) em: {nome}")
         except Exception as e2:
             log.error(f"  ❌ JS click também falhou em: {nome} — {e2}")
-            driver.save_screenshot(
-                f"erro_{nome.replace(' ', '_').lower()}.png"
-            )
             return False
 
     return True
 
-
 # -------------------------------------------------------------------------
-# Utilitário: aguardar_download_concluir
+# Utilitários Novos (Arquitetura Clean Code)
 # -------------------------------------------------------------------------
-def aguardar_download_concluir(
-    pasta_download: str,
-    timeout: int = TIMEOUT_DOWNLOAD,
-    extensao: str = ".csv",
-    referencia_tempo: float = None,
-) -> Optional[str]:
-    """Aguarda até que um novo arquivo CSV apareça na pasta de download.
+def renomear_arquivo_exportado(caminho_original: str, pasta_download: str, nome_sequence: str, step_label: str) -> str:
+    seq_seguro = "".join([c if c.isalnum() else "_" for c in nome_sequence]).strip("_")
+    step_seguro = step_label.replace(" ", "").replace(":", "_")
+    
+    novo_nome = f"{seq_seguro}_{step_seguro}.csv"
+    novo_caminho = os.path.join(pasta_download, novo_nome)
 
-    Ignora arquivos .crdownload (Chrome ainda em progresso) e arquivos
-    mais antigos que o instante de início da espera.
+    if os.path.exists(novo_caminho):
+        os.remove(novo_caminho)
 
-    Args:
-        pasta_download: Caminho absoluto da pasta monitorada.
-        timeout: Tempo máximo de espera em segundos. Default: 90.
-        extensao: Extensão do arquivo esperado. Default: ".csv".
-        referencia_tempo: Timestamp float (time.time()) usado como
-            marco inicial. Se None, usa o momento da chamada.
+    shutil.move(caminho_original, novo_caminho)
+    log.info(f"  [ARQUIVO] Renomeado para: {novo_nome}")
+    
+    return novo_caminho
 
-    Returns:
-        Caminho absoluto do arquivo mais recente encontrado, ou None.
+def verificar_se_tabela_tem_dados(driver) -> bool:
     """
-    inicio = referencia_tempo or time.time()
-    log.info(f"[DOWNLOAD] Aguardando arquivo {extensao} em: {pasta_download}")
+    Verifica de forma inteligente e rápida se a tabela retornou dados.
+    Corrige o falso-positivo garantindo que o elemento está visível,
+    e faz um 'fast-fail' se a mensagem de vazio estiver na tela.
+    """
+    # 1. Fast-Fail: Procura a mensagem exata de vazio ("No records found")
+    # find_elements retorna uma lista (vazia se não achar nada), não gera erro.
+    elementos_vazios = driver.find_elements(By.XPATH, '//*[contains(text(), "No records found")]')
+    for el in elementos_vazios:
+        if el.is_displayed():
+            log.info("  [FAST-CHECK] Mensagem 'No records found' detectada na tela.")
+            return False
 
-    while time.time() - inicio < timeout:
-        candidatos = [
-            f
-            for f in glob.glob(os.path.join(pasta_download, f"*{extensao}"))
-            if not f.endswith(".crdownload")
-            and os.path.getctime(f) >= inicio
-        ]
-        if candidatos:
-            mais_recente = max(candidatos, key=os.path.getctime)
-            log.info(f"[DOWNLOAD] ✅ Arquivo recebido: {mais_recente}")
-            return mais_recente
-        time.sleep(1)
+    # 2. Verificação Segura: Exige que o botão esteja VISÍVEL (não apenas oculto no HTML)
+    wait_curto = WebDriverWait(driver, 3)
+    try:
+        wait_curto.until(EC.visibility_of_element_located((By.CSS_SELECTOR, SELECTOR_BTN_BULK_SELECT)))
+        return True
+    except TimeoutException:
+        return False
 
-    log.error(
-        f"[DOWNLOAD] ❌ Timeout: nenhum {extensao} encontrado em {timeout}s."
+# =========================================================================
+# CAMADA 3 (BOTTOM): EXTRAI APENAS UM STEP
+# =========================================================================
+def extrair_unico_step(driver, wait, nome_sequence: str, step_label: str, pasta_download: str) -> Optional[str]:
+    """Sabe apenas como lidar com 1 step: Marca, Exporta, Renomeia e Desmarca."""
+    log.info(f"\n  [STEP] Iniciando processamento: {step_label}")
+    arquivo_final = None
+
+    if not clicar_elemento(driver, wait, _xpath_step_label(step_label), "xpath", f"Marcar {step_label}", js_click=True):
+        return None
+    
+    time.sleep(3) 
+    
+    if not verificar_se_tabela_tem_dados(driver):
+        log.warning(f"  ⚠️ Nenhum contato encontrado no {step_label}. Pulando exportação.")
+    else:
+        sucesso = (
+            clicar_elemento(driver, wait, SELECTOR_BTN_BULK_SELECT, "css", "Bulk Select") and
+            clicar_elemento(driver, wait, SELECTOR_LINK_SELECT_ALL, "css", "Select all people") and
+            clicar_elemento(driver, wait, SELECTOR_BTN_MORE_ACTIONS, "css", "More Actions") and
+            clicar_elemento(driver, wait, XPATH_LINK_EXPORT, "xpath", "Export") and
+            clicar_elemento(driver, wait, XPATH_BTN_EXPORT_RECORDS, "xpath", "Export records")
+        )
+
+        if sucesso:
+            # --- NOVO: Dual-Polling (Monitora a pasta E o botão simultaneamente) ---
+            log.info("  [DOWNLOAD] Aguardando processamento (auto-download ou botão)...")
+            ts_inicio = time.time()
+            caminho_csv = None
+            botao_clicado = False
+
+            while time.time() - ts_inicio < TIMEOUT_DOWNLOAD:
+                # 1. Verifica se o arquivo chegou magicamente na pasta (Auto-download do Apollo)
+                # Usamos getmtime (Data de Modificação) para ter precisão absoluta contra o Windows
+                candidatos = [
+                    f for f in glob.glob(os.path.join(pasta_download, "*.csv"))
+                    if not f.endswith(".crdownload") and os.path.getmtime(f) >= ts_inicio - 2.0
+                ]
+                if candidatos:
+                    caminho_csv = max(candidatos, key=os.path.getmtime)
+                    log.info(f"  [DOWNLOAD] ✅ Arquivo detectado: {caminho_csv}")
+                    break
+
+                # 2. Se o arquivo não chegou, procura o botão "Download" como fallback
+                if not botao_clicado:
+                    try:
+                        btn = driver.find_element(By.XPATH, XPATH_BTN_DOWNLOAD)
+                        if btn.is_displayed() and btn.is_enabled():
+                            driver.execute_script("arguments[0].click();", btn)
+                            log.info("  [DOWNLOAD] Botão 'Download' detectado e clicado manualmente.")
+                            botao_clicado = True
+                    except Exception:
+                        pass # Silencioso, pois é normal o botão demorar ou nem aparecer
+
+                time.sleep(1)
+
+            # --- Tratamento Pós-Download ---
+            if caminho_csv:
+                # Buffer de 1 segundo para o Windows/Antivírus liberar o arquivo antes de mover
+                time.sleep(1) 
+                arquivo_final = renomear_arquivo_exportado(caminho_csv, pasta_download, nome_sequence, step_label)
+                
+                log.info("  [COOLDOWN] Fechando modal de sucesso do Apollo (ESC)...")
+                driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                
+                log.info("  [COOLDOWN] Aguardando a tela estabilizar (3s)...")
+                time.sleep(3) 
+            else:
+                log.error(f"  ❌ Timeout: Nenhum CSV recebido após {TIMEOUT_DOWNLOAD}s.")
+
+    log.info(f"  [LIMPANDO] Desmarcando {step_label}...")
+    clicar_elemento(driver, wait, _xpath_step_label(step_label), "xpath", f"Desmarcar {step_label}", js_click=True)
+    time.sleep(3)
+
+    return arquivo_final
+
+# =========================================================================
+# CAMADA 2 (MIDDLE): PREPARA A SEQUENCE E ITERA OS STEPS
+# =========================================================================
+def processar_uma_sequence(driver, wait, nome_sequence: str, step_labels: list, pasta_download: str) -> list:
+    log.info(f"\n[SEQUENCE] ── Iniciando Sequence: {nome_sequence} ──")
+    arquivos_baixados = []
+
+    driver.get(URL_SEQUENCES_LIST)
+    try:
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div[role="gridcell"]')))
+    except TimeoutException:
+        log.error(f"[SEQUENCE] ❌ Tabela de Sequences não renderizou para {nome_sequence}.")
+        return arquivos_baixados
+    time.sleep(1)
+
+    if not clicar_elemento(driver, wait, _xpath_sequence_link(nome_sequence), "xpath", f"Acessar {nome_sequence}"):
+        log.error(f"[SEQUENCE] ❌ Falha ao encontrar a sequence {nome_sequence}.")
+        return arquivos_baixados
+    time.sleep(2)
+
+    if not clicar_elemento(driver, wait, SELECTOR_TAB_CONTACTS, "css", "Aba Contacts"):
+        return arquivos_baixados
+    time.sleep(1)
+
+    log.info("  [SEQUENCE] Verificando modal de confirmação...")
+    try:
+        btn_confirm = WebDriverWait(driver, 5).until(EC.element_to_be_clickable((By.XPATH, XPATH_BTN_CONFIRM_MODAL)))
+        btn_confirm.click()
+        log.info("  [SEQUENCE] ✅ Modal 'Are you sure?' confirmado.")
+    except TimeoutException:
+        pass 
+    time.sleep(2)
+
+    preparacao_ok = (
+        clicar_elemento(driver, wait, SELECTOR_BTN_SHOW_FILTERS, "css", "Show Filters") and
+        clicar_elemento(driver, wait, XPATH_ACCORDION_SEQUENCE_STEP, "xpath", "Accordion Step")
     )
-    return None
 
+    if not preparacao_ok:
+        log.error(f"[SEQUENCE] ❌ Falha ao preparar filtros para {nome_sequence}.")
+        return arquivos_baixados
+    time.sleep(1)
 
-# -------------------------------------------------------------------------
-# Função principal de extração
-# -------------------------------------------------------------------------
-def extrair_contatos_por_step(
-    nome_sequence: str,
-    step_label: str = "Step: 1",
-    download_dir: str = None,
-    headless: bool = False,
-    timeout: int = TIMEOUT_ELEMENTO,
-) -> Optional[str]:
-    """Acessa o Apollo.io e exporta contatos de um Step específico de uma Sequence.
+    for step in step_labels:
+        arquivo = extrair_unico_step(driver, wait, nome_sequence, step, pasta_download)
+        if arquivo:
+            arquivos_baixados.append(arquivo)
 
-    Executa as 11 etapas de navegação/interação descritas no módulo,
-    desde a lista de Sequences até o download do CSV.
+    return arquivos_baixados
 
-    Args:
-        nome_sequence: Texto (parcial) do nome da Sequence a ser clicada
-            na lista. Ex: "Presença Invisível" ou "[André] Presença".
-        step_label: Rótulo exato do Step a filtrar, conforme exibido na UI.
-            Ex: "Step: 1", "Step: 2". Default: "Step: 1".
-        download_dir: Caminho absoluto da pasta onde o CSV será salvo.
-            Se None, usa a pasta Downloads padrão do Windows.
-        headless: Se True, Chrome roda sem interface gráfica.
-            Use False na primeira execução para que o login seja visível.
-        timeout: Tempo máximo (segundos) para aguardar cada elemento.
-
-    Returns:
-        Caminho completo do arquivo CSV baixado, ou None em caso de erro.
-    """
+# =========================================================================
+# CAMADA 1 (TOP): ORQUESTRAÇÃO GERAL
+# =========================================================================
+def orquestrar_extracao_sequences(nomes_sequences: list, step_labels: list, download_dir: str = None, headless: bool = False, timeout: int = TIMEOUT_ELEMENTO) -> dict:
     pasta = download_dir or str(Path.home() / "Downloads")
+    resultado_geral = {} 
 
     log.info("=" * 60)
-    log.info("  APOLLO SEQUENCE CONTACTS EXTRACT — Iniciando")
-    log.info("=" * 60)
-    log.info(f"  Sequence: {nome_sequence}")
-    log.info(f"  Step:     {step_label}")
-    log.info(f"  Download: {pasta}")
-    log.info(f"  Headless: {headless}")
+    log.info(f"  ORQUESTRADOR APOLLO — Iniciando Operação em Lote")
+    log.info(f"  Sequences: {nomes_sequences}")
+    log.info(f"  Steps:     {step_labels}")
     log.info("=" * 60)
 
-    driver = iniciar_chrome_driver(
-        headless=headless,
-        usar_perfil_visu=True,
-        download_dir=pasta,
-    )
+    driver = iniciar_chrome_driver(headless=headless, usar_perfil_visu=True, download_dir=pasta)
 
     try:
         wait = WebDriverWait(driver, timeout)
 
-        # ── PASSO 0: Verificar sessão e navegar para a lista de Sequences ─
-        log.info("[0/11] Verificando sessão e navegando para Sequences...")
         if not verificar_e_configurar(driver, CAMINHO_PERFIL_VISU, URL_SEQUENCES_LIST):
-            log.error("[EXTRACT] Sessão inválida. Extração cancelada.")
-            return None
+            log.error("[ORQUESTRADOR] Sessão inválida. Cancelando tudo.")
+            return resultado_geral
 
-        # Aguarda a tabela de sequences renderizar
-        try:
-            wait.until(EC.presence_of_element_located(
-                (By.CSS_SELECTOR, 'div[role="gridcell"]')
-            ))
-        except TimeoutException:
-            log.error("[0/12] ❌ Tabela de Sequences não renderizou.")
-            driver.save_screenshot("erro_lista_sequences.png")
-            return None
-        log.info(f"[0/12] ✅ Lista de Sequences carregada.")
+        for nome in nomes_sequences:
+            arquivos = processar_uma_sequence(driver, wait, nome, step_labels, pasta)
+            resultado_geral[nome] = arquivos
 
-        # ── ETAPA 1: Clicar na Sequence alvo ─────────────────────────────
-        log.info(f'[1/12] Clicando na Sequence: "{nome_sequence}"...')
-        if not clicar_elemento(
-            driver, wait,
-            seletor=_xpath_sequence_link(nome_sequence),
-            tipo="xpath",
-            descricao=f"Sequence: {nome_sequence}",
-        ):
-            return None
-        time.sleep(2)  # Aguarda SPA navegar para a página da Sequence
-
-        # ── ETAPA 2: Aba "Contacts" ───────────────────────────────────────
-        log.info("[2/12] Clicando na aba Contacts...")
-        if not clicar_elemento(
-            driver, wait,
-            seletor=SELECTOR_TAB_CONTACTS,
-            tipo="css",
-            descricao="Aba Contacts",
-        ):
-            return None
-        time.sleep(1)
-
-        # ── ETAPA 3: Confirmar modal "Are you sure?" ──────────────────────
-        # O Apollo exibe este modal ao trocar de aba com alterações não salvas.
-        # Tentamos localizar o botão Confirm; se não aparecer dentro de 5s,
-        # assumimos que o modal não foi exibido e seguimos normalmente.
-        log.info("[3/12] Verificando modal de confirmação...")
-        try:
-            btn_confirm = WebDriverWait(driver, 5).until(
-                EC.element_to_be_clickable((By.XPATH, XPATH_BTN_CONFIRM_MODAL))
-            )
-            btn_confirm.click()
-            log.info("[3/12] ✅ Modal confirmado.")
-        except TimeoutException:
-            log.info("[3/12] ℹ️  Modal 'Are you sure?' não apareceu — seguindo.")
-        time.sleep(2)  # Aguarda carregamento da lista de contatos
-
-        # ── ETAPA 4: Botão "Show Filters" ────────────────────────────────
-        log.info("[4/12] Abrindo painel de filtros...")
-        if not clicar_elemento(
-            driver, wait,
-            seletor=SELECTOR_BTN_SHOW_FILTERS,
-            tipo="css",
-            descricao="Show Filters",
-        ):
-            return None
-        time.sleep(1)
-
-        # ── ETAPA 5: Accordion "Sequence Step" ───────────────────────────
-        log.info("[5/12] Expandindo filtro Sequence Step...")
-        if not clicar_elemento(
-            driver, wait,
-            seletor=XPATH_ACCORDION_SEQUENCE_STEP,
-            tipo="xpath",
-            descricao="Accordion Sequence Step",
-        ):
-            return None
-        time.sleep(1)
-
-        # ── ETAPA 6: Checkbox do Step alvo ───────────────────────────────
-        log.info(f'[6/12] Selecionando filtro "{step_label}"...')
-        if not clicar_elemento(
-            driver, wait,
-            seletor=_xpath_step_label(step_label),
-            tipo="xpath",
-            descricao=f"Checkbox {step_label}",
-            js_click=True,  # Labels com checkbox requerem JS click no Apollo
-        ):
-            return None
-        time.sleep(2)  # Aguarda a lista de contatos filtrar
-
-        # ── ETAPA 7: Botão de seleção múltipla (bulk select) ─────────────
-        log.info("[7/12] Clicando no botão de seleção múltipla...")
-        if not clicar_elemento(
-            driver, wait,
-            seletor=SELECTOR_BTN_BULK_SELECT,
-            tipo="css",
-            descricao="Bulk Select Button",
-        ):
-            return None
-        time.sleep(1)
-
-        # ── ETAPA 8: "Select all people (N)" ─────────────────────────────
-        log.info("[8/12] Selecionando todos os contatos...")
-        if not clicar_elemento(
-            driver, wait,
-            seletor=SELECTOR_LINK_SELECT_ALL,
-            tipo="css",
-            descricao="Select all people",
-        ):
-            return None
-        time.sleep(1)
-
-        # ── ETAPA 9: Botão "More actions" (⋯) ────────────────────────────
-        log.info("[9/12] Abrindo menu de ações (More actions)...")
-        if not clicar_elemento(
-            driver, wait,
-            seletor=SELECTOR_BTN_MORE_ACTIONS,
-            tipo="css",
-            descricao="More Actions Button",
-        ):
-            return None
-        time.sleep(1)
-
-        # ── ETAPA 10: Opção "Export" no menu ─────────────────────────────
-        log.info('[10/12] Clicando em "Export"...')
-        if not clicar_elemento(
-            driver, wait,
-            seletor=XPATH_LINK_EXPORT,
-            tipo="xpath",
-            descricao="Menu Export",
-        ):
-            return None
-        time.sleep(1.5)  # Aguarda o modal de exportação abrir
-
-        # ── ETAPA 11: Botão "Export records" no modal ─────────────────────
-        log.info('[11/12] Confirmando exportação ("Export records")...')
-        if not clicar_elemento(
-            driver, wait,
-            seletor=XPATH_BTN_EXPORT_RECORDS,
-            tipo="xpath",
-            descricao="Export records",
-        ):
-            return None
-        time.sleep(2)  # Aguarda o modal de download aparecer
-
-        # ── ETAPA 12: Botão "Download" e aguarda o arquivo ────────────────
-        log.info('[12/12] Clicando em "Download" e aguardando arquivo CSV...')
-        ts_inicio_download = time.time()
-        if not clicar_elemento(
-            driver, wait,
-            seletor=XPATH_BTN_DOWNLOAD,
-            tipo="xpath",
-            descricao="Download",
-        ):
-            return None
-
-        caminho_csv = aguardar_download_concluir(
-            pasta_download=pasta,
-            timeout=TIMEOUT_DOWNLOAD,
-            referencia_tempo=ts_inicio_download,
-        )
-
-        if caminho_csv:
-            log.info(f"[12/12] ✅ Download concluído: {caminho_csv}")
-        else:
-            log.error("[12/12] ❌ Download não detectado dentro do tempo limite.")
-            driver.save_screenshot("erro_download.png")
-
-        return caminho_csv
+        return resultado_geral
 
     except Exception as e:
-        log.error(f"[ERRO] Falha inesperada: {e}", exc_info=True)
-        try:
-            driver.save_screenshot("erro_inesperado.png")
-        except Exception:
-            pass
-        return None
-
+        log.error(f"[ERRO FATAL] Falha inesperada no orquestrador: {e}", exc_info=True)
+        return resultado_geral
     finally:
         driver.quit()
-        log.info("[EXTRACT] Navegador encerrado.")
-
+        log.info("[ORQUESTRADOR] Operação finalizada. Navegador encerrado.")
 
 # -------------------------------------------------------------------------
-# Execução direta (teste)
+# Execução Direta (Para Testes)
 # -------------------------------------------------------------------------
 if __name__ == "__main__":
-    resultado = extrair_contatos_por_step(
-        nome_sequence="Presença Invisível",
-        step_label="Step: 1",
-        headless=False,
+    TEST_SEQUENCES = ["[Alessandro]"] 
+    TEST_STEPS = ["Step: 1", "Step: 2"]
+    
+    resultados = orquestrar_extracao_sequences(
+        nomes_sequences=TEST_SEQUENCES,
+        step_labels=TEST_STEPS,
+        headless=False
     )
-    if resultado:
-        print(f"\n[OK] CSV exportado: {resultado}")
-    else:
-        print("\n[ERRO] Extração falhou. Verifique os logs e screenshots.")
+    print(f"\nResultados do teste direto: {resultados}")

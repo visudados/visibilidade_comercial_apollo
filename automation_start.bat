@@ -1,10 +1,10 @@
 @echo off
 :: ============================================================
 ::  VISU Dados — iniciar_apollo_contacts.bat
-::  Duplo-clique para executar a extração de contatos por Step.
-::  Verifica e instala o ambiente automaticamente se necessário.
 :: ============================================================
 SETLOCAL ENABLEDELAYEDEXPANSION
+:: Força o terminal a usar UTF-8
+chcp 65001 >nul
 title VISU — Apollo Sequence Contacts Extractor
 
 echo.
@@ -16,7 +16,6 @@ timeout /t 2 /nobreak >nul
 
 SET "SCRIPT_DIR=%~dp0"
 SET "PYTHON_DIR=%SCRIPT_DIR%python"
-SET "VENV_DIR=%PYTHON_DIR%\.venv"
 
 IF NOT EXIST "%PYTHON_DIR%\pyproject.toml" (
     echo  [ERRO] Pasta "python" ou pyproject.toml nao encontrado.
@@ -29,81 +28,80 @@ IF NOT EXIST "%PYTHON_DIR%\pyproject.toml" (
 :: ── PASSO 1: Verificar uv ─────────────────────────────────────
 echo  [1/4] Verificando gerenciador de ambiente (uv)...
 where uv >nul 2>&1
-IF %ERRORLEVEL% NEQ 0 (
-    echo         uv nao encontrado. Instalando automaticamente...
-    powershell -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex"
-    IF !ERRORLEVEL! NEQ 0 (
-        echo  [ERRO] Falha ao instalar o uv.
-        pause
-        exit /b 1
-    )
-    SET "PATH=%USERPROFILE%\.local\bin;%USERPROFILE%\.cargo\bin;%PATH%"
-    where uv >nul 2>&1
-    IF !ERRORLEVEL! NEQ 0 (
-        echo  [AVISO] Feche esta janela, abra uma nova e execute novamente.
-        pause
-        exit /b 1
-    )
-    echo  [1/4] uv instalado com sucesso.
-) ELSE (
-    echo  [1/4] uv: OK
-)
-timeout /t 2 /nobreak >nul
+:: Se o uv já existir, pula toda a instalação e vai direto para UV_INSTALADO
+IF %ERRORLEVEL% EQU 0 GOTO UV_INSTALADO
 
-:: ── PASSO 2: Verificar ambiente virtual ───────────────────────
-echo  [2/4] Verificando ambiente virtual Python (.venv)...
-cd /d "%PYTHON_DIR%"
+echo         uv nao encontrado. Instalando via WinGet (Metodo Seguro/Sem AV)...
+winget install --id=astral-sh.uv -e --accept-source-agreements --accept-package-agreements
 
-IF EXIST "%VENV_DIR%" (
-    echo  [2/4] Ambiente virtual: JA EXISTE em python\.venv
-) ELSE (
-    echo         Criando ambiente virtual...
-    uv sync
-    IF !ERRORLEVEL! NEQ 0 (
-        echo  [ERRO] Falha ao criar o ambiente virtual.
-        pause
-        exit /b 1
-    )
-    echo  [2/4] Ambiente virtual criado com sucesso.
-)
-timeout /t 2 /nobreak >nul
-
-:: ── PASSO 3: Sincronizar dependencias ─────────────────────────
-echo  [3/4] Verificando dependencias Python...
-uv sync
-IF %ERRORLEVEL% NEQ 0 (
-    echo  [ERRO] Falha ao sincronizar dependencias.
+IF !ERRORLEVEL! NEQ 0 (
+    echo.
+    echo  [ERRO] Falha ao instalar o uv via WinGet.
+    echo  Por favor, instale manualmente em: https://docs.astral.sh/uv/
+    echo.
     pause
     exit /b 1
 )
-echo  [3/4] Dependencias: OK
-timeout /t 2 /nobreak >nul
 
-:: ── PASSO 4: Executar a automacao ─────────────────────────────
-echo  [4/4] Iniciando Apollo Sequence Contacts Extractor...
+:: A MÁGICA DA SESSÃO ÚNICA (Fora do bloco IF para não quebrar o CMD)
+for /f "tokens=2*" %%A in ('reg query HKCU\Environment /v Path 2^>nul ^| find /i "Path"') do set "USER_PATH=%%B"
+set "PATH=!USER_PATH!;%PATH%"
+
+where uv >nul 2>&1
+IF !ERRORLEVEL! NEQ 0 (
+    echo.
+    echo  [ERRO FATAL] Nao foi possivel carregar o uv na sessao atual.
+    echo  Feche esta janela, abra uma nova e tente rodar o script novamente.
+    pause
+    exit /b 1
+)
+echo  [1/4] uv instalado e reconhecido automaticamente!
+
+:UV_INSTALADO
+echo  [1/4] uv: OK
+timeout /t 1 /nobreak >nul
+
+
+:: ── PASSO 2 e 3: Ambiente Virtual e Sincronização ─────────────
+echo.
+echo  [2/4] Preparando ambiente virtual Python e dependencias...
+cd /d "%PYTHON_DIR%"
+
+:: uv sync é inteligente: cria o .venv (se nao existir) e instala o pyproject.toml
+uv sync
+IF %ERRORLEVEL% NEQ 0 (
+    echo  [ERRO] Falha ao criar ambiente ou sincronizar dependencias.
+    pause
+    exit /b 1
+)
+echo  [3/4] Ambiente e dependencias: OK
+timeout /t 1 /nobreak >nul
+
+
+:: ── PASSO 4: Executar Automação ───────────────────────────────
+echo.
+echo  [4/4] Iniciando o robo do Apollo...
+echo.
+echo  =============================================================
+echo  A automacao assumira o controle do navegador a partir de agora.
+echo  Se for seu primeiro acesso, voce tera 3 minutos para logar.
+echo  =============================================================
 echo.
 
+:: O uv run garante que o script rode usando o Python isolado correto
 uv run python projects\run_apollo_sequence_contacts.py
 SET RESULT=%ERRORLEVEL%
 
-echo.
 IF %RESULT% EQU 0 (
-    echo  ====================================================
-    echo   Concluido com sucesso!
-    echo   O CSV foi salvo na pasta Downloads do Windows.
-    echo  ====================================================
-    echo.
-    timeout /t 5 /nobreak >nul
+    :: Filosofia "Silent Success": se deu certo, apenas fecha a janela sem pedir ENTER.
+    exit /b 0
 ) ELSE (
-    echo  ====================================================
-    echo   Ocorreu um erro durante a execucao.
     echo.
-    echo   Arquivos de diagnostico (pasta python\projects):
-    echo     apollo_sequence_contacts_extract.log
-    echo     erro_*.png  (screenshot do momento do erro)
-    echo  ====================================================
-    echo.
+    echo  =============================================================
+    echo   Ocorreu um erro durante a execucao. 
+    echo   Verifique o log e as imagens de erro na pasta python/projects
+    echo  =============================================================
+    :: Mantemos o pause APENAS no erro, para dar tempo do usuário ler o que houve.
     pause
+    exit /b 1
 )
-
-ENDLOCAL

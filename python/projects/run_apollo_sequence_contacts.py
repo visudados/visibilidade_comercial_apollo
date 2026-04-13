@@ -2,90 +2,97 @@
 run_apollo_sequence_contacts.py - VISU Dados
 =============================================
 
-Ponto de entrada para exportação de contatos filtrados por Step
-de uma Sequence específica do Apollo.io.
+Script de execução (Entry Point) para a extração em lote de contatos
+de múltiplas Sequences e múltiplos Steps no Apollo.io.
 
-Segue o padrão run_*.py do projeto VISU: configuração centralizada
-no topo do arquivo, sem arquivos .env ou argumentos de linha de comando.
-
-Uso:
-----
-    python run_apollo_sequence_contacts.py
-
-    Ou via .bat (duplo-clique):
-        iniciar_apollo_contacts.bat  (a criar)
-
-Configuração:
--------------
-Edite as variáveis da seção CONFIG abaixo:
-    NOME_SEQUENCE  — texto (parcial) do nome da Sequence na lista Apollo
-    STEP_LABEL     — rótulo exato do Step conforme exibido na UI
-    DOWNLOAD_DIR   — pasta de destino do CSV (None = Downloads do Windows)
-    HEADLESS       — True para rodar sem abrir o Chrome visivelmente
-    TIMEOUT        — segundos máximos de espera por cada elemento
+Este arquivo serve como o painel de configuração da automação.
+Para adicionar novas pessoas ou etapas, basta alterar as listas abaixo.
 """
 
 import sys
 from pathlib import Path
 
+# Garante que o Python encontre os módulos internos do projeto
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from projects.extract.extract_apollo_sequence_contacts import extrair_contatos_por_step
+from projects.extract.extract_apollo_sequence_contacts import orquestrar_extracao_sequences
 
-# -------------------------------------------------------------------------
-# CONFIG — ajuste conforme necessário
-# -------------------------------------------------------------------------
+# =========================================================================
+# CONFIGURAÇÕES DA AUTOMAÇÃO
+# =========================================================================
 
-# Texto parcial do nome da Sequence a ser selecionada na lista.
-# Use um trecho único o suficiente para não corresponder a outra sequence.
-NOME_SEQUENCE = "Presença Invisível"
+# 1. Pessoas / Sequences
+# Use apenas o identificador único para evitar problemas com aspas ou emojis.
+NOMES_SEQUENCES = [
+    #"[André]",
+    "[Antonio]",
+    #"[Alessandro]",
+    # Adicione outras pessoas aqui embaixo seguindo o mesmo padrão:
+    # "[NomeDaPessoa]",
+]
 
-# Rótulo exato do Step, conforme aparece no filtro lateral do Apollo.
-# Exemplos: "Step: 1", "Step: 2", "Step: 3"
-STEP_LABEL = "Step: 1"
+# 2. Etapas (Steps)
+# Lista exata de como o rótulo aparece no filtro do Apollo.
+STEPS_LABELS = [
+    "Step: 1",
+    "Step: 2",
+    "Step: 4",
+    "Step: 5",
+    "Step: 6"
+]
 
-# Pasta de destino do CSV exportado.
-# None = usa a pasta Downloads padrão do Windows do usuário atual.
-# Exemplo com caminho fixo: r"C:\Relatorios\Apollo"
+# 3. Configurações de Ambiente
+# Se None, o robô usará a pasta 'Downloads' padrão do seu Windows.
 DOWNLOAD_DIR = None
 
-# False = abre o Chrome visível (recomendado para validação e primeiro uso)
-# True  = roda em segundo plano (para agendamentos automatizados)
+# Se True, o Chrome roda escondido (em background).
+# IMPORTANTE: Deixe False para conseguir fazer o login manual na primeira vez!
 HEADLESS = False
 
-# Tempo máximo (segundos) para aguardar cada elemento na página
+# Tempo máximo (em segundos) que o robô espera um elemento ou página carregar.
 TIMEOUT = 30
 
-# -------------------------------------------------------------------------
-# Execução
-# -------------------------------------------------------------------------
+# =========================================================================
+# EXECUÇÃO PRINCIPAL
+# =========================================================================
 if __name__ == "__main__":
-    print()
     print("=" * 60)
-    print("  VISU Dados — Apollo Sequence Contacts Extractor")
+    print("  INICIANDO AUTOMAÇÃO VISU - APOLLO (LOTE)")
     print("=" * 60)
-    print(f"  Sequence : {NOME_SEQUENCE}")
-    print(f"  Step     : {STEP_LABEL}")
-    print()
+    print(f"  Sequences alvo: {len(NOMES_SEQUENCES)}")
+    print(f"  Steps por alvo: {len(STEPS_LABELS)}")
+    print("=" * 60)
 
-    resultado = extrair_contatos_por_step(
-        nome_sequence=NOME_SEQUENCE,
-        step_label=STEP_LABEL,
+    # Chama a Camada 1 (Top Level) da nossa arquitetura
+    resultados = orquestrar_extracao_sequences(
+        nomes_sequences=NOMES_SEQUENCES,
+        step_labels=STEPS_LABELS,
         download_dir=DOWNLOAD_DIR,
         headless=HEADLESS,
         timeout=TIMEOUT,
     )
 
-    print()
-    if resultado:
-        print("=" * 60)
-        print("  Extração concluída com sucesso!")
-        print(f"  Arquivo: {resultado}")
-        print("=" * 60)
+    # =========================================================================
+    # RELATÓRIO FINAL (UX)
+    # =========================================================================
+    print("\n" + "=" * 60)
+    print("  RESUMO DA EXTRAÇÃO CONCLUÍDA")
+    print("=" * 60)
+
+    if not resultados:
+        print("  ⚠️ Nenhum arquivo foi extraído. Verifique os logs para erros.")
     else:
-        print("=" * 60)
-        print("  Extração falhou.")
-        print("  Verifique: apollo_sequence_contacts_extract.log")
-        print("  Screenshots de erro estão na pasta python\\projects")
-        print("=" * 60)
-    print()
+        total_arquivos = sum(len(arquivos) for arquivos in resultados.values())
+        print(f"  ✅ Total de arquivos baixados com sucesso: {total_arquivos}\n")
+
+        # Imprime os resultados organizados por pessoa
+        for pessoa, arquivos in resultados.items():
+            print(f"  👤 {pessoa}: {len(arquivos)} steps extraídos")
+            for arq in arquivos:
+                # Extrai apenas o nome do arquivo final para o console não ficar poluído
+                nome_arquivo = Path(arq).name
+                print(f"     -> {nome_arquivo}")
+
+    print("=" * 60)
+    print("  A operação foi finalizada. Pode fechar esta janela.")
+    print("=" * 60)
