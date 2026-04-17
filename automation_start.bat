@@ -96,7 +96,7 @@ IF %RESULT% EQU 0 (
     :: Filosofia "Silent Success": se deu certo, apenas fecha a janela sem pedir ENTER.
     exit /b 0
 ) ELSE (
-    echo.
+    echo.git 
     echo  =============================================================
     echo   Ocorreu um erro durante a execucao. 
     echo   Verifique o log e as imagens de erro na pasta python/projects

@@ -5,6 +5,8 @@ description = "Automação de extração de Sequences Analytics do Apollo.io —
 requires-python = ">=3.11"
 dependencies = [
     "selenium>=4.20.0",
+    "pandas>=2.0.0",    
+    "pyarrow>=14.0.0",  
 ]
 
 # ─────────────────────────────────────────────────────────────────────────

@@ -24,9 +24,9 @@ from projects.extract.extract_apollo_sequence_contacts import orquestrar_extraca
 # 1. Pessoas / Sequences
 # Use apenas o identificador único para evitar problemas com aspas ou emojis.
 NOMES_SEQUENCES = [
-    #"[André]",
+    "[André]",
     "[Antonio]",
-    #"[Alessandro]",
+    "[Alessandro]",
     # Adicione outras pessoas aqui embaixo seguindo o mesmo padrão:
     # "[NomeDaPessoa]",
 ]
