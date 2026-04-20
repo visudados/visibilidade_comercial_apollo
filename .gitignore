@@ -7,6 +7,9 @@ profile_visu/
 # Logs
 *.log
 
+# Gemini CLI Interaction Log
+GEMINI.md
+
 #Ambientes Virtuais
 .venv/
 venv/
