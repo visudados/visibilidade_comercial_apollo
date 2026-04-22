@@ -58,8 +58,11 @@ def extrair_metadados_do_nome(nome_arquivo: str):
         partes = nome_base.split("_Step_")
         consultor = partes[0].strip()
         step_num = partes[1].strip()
-        return consultor, f"Step: {step_num}"
-    
+        
+        # Retorna apenas o número limpo
+        return consultor, step_num
+
+    # Fallback caso o nome do arquivo fuja do padrão
     return "Desconhecido", "Step: Desconhecido"
 
 
