@@ -162,6 +162,12 @@ def processar_transformacao():
     df_final.to_parquet(CAMINHO_PARQUET, index=False)
     log.info(f"✅ Parquet atualizado com sucesso em: {CAMINHO_PARQUET}")
     log.info(f"Total de linhas na base do Power BI agora: {len(df_final)}")
+
+    # 6. Exporta o Master do dia como Parquet (usado na fase de Load)
+    nome_master_parquet = f"master_apollo_{DATA_PASTA}.parquet"
+    caminho_master_parquet = PASTA_RAW / nome_master_parquet
+    df_master.to_parquet(caminho_master_parquet, index=False)
+    log.info(f"✅ Parquet do dia exportado em: {caminho_master_parquet}")
     log.info("=" * 60)
 
 
